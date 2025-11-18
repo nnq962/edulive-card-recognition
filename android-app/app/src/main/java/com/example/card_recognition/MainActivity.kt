@@ -1,5 +1,7 @@
 package com.example.card_recognition
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
@@ -7,19 +9,32 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.view.PreviewView
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import com.example.card_recognition.ui.theme.CardrecognitionTheme
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
+import com.example.card_recognition.ui.theme.CardrecognitionTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.IOException
-
 
 class MainActivity : ComponentActivity() {
 
@@ -29,6 +44,22 @@ class MainActivity : ComponentActivity() {
 
     // 1. Khai báo một thuộc tính để giữ đối tượng Recognizer
     private lateinit var recognizer: Recognizer
+
+    // Biến trạng thái để theo dõi quyền camera
+    private var hasCameraPermission by mutableStateOf(false)
+
+    // Trình khởi chạy (launcher) để xin quyền
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        hasCameraPermission = isGranted
+        if (isGranted) {
+            Log.i(TAG, "Quyền Camera đã được cấp.")
+            // Bạn có thể không cần làm gì ở đây, Composable sẽ tự cập nhật
+        } else {
+            Log.w(TAG, "Quyền Camera bị từ chối.")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,6 +84,9 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Kiểm tra quyền camera khi khởi động
+        checkCameraPermission()
+
         // Dòng log này sẽ chạy NGAY LẬP TỨC
         // mà không cần chờ recognizer.initialize() xong
         Log.i(TAG, "onCreate đã hoàn tất trên luồng Main.")
@@ -61,13 +95,28 @@ class MainActivity : ComponentActivity() {
         setContent {
             CardrecognitionTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
+                    Box(modifier = Modifier.padding(innerPadding)) {
+                        // 3. Hiển thị nội dung dựa trên trạng thái quyền
+                        if (hasCameraPermission) {
+                            // Nếu có quyền, hiển thị Camera
+                            CameraScreen(recognizer = recognizer)
+                        } else {
+                            // Nếu không, hiển thị nút xin quyền
+                            PermissionRequestScreen {
+                                requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+
+    private fun checkCameraPermission() {
+        hasCameraPermission = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
     }
 
     /**
@@ -121,18 +170,67 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Composable để hiển thị camera và xử lý frame
 @Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
+fun CameraScreen(recognizer: Recognizer) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // 1. Tạo PreviewView (View truyền thống) để CameraX hiển thị
+    val previewView = remember {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+        }
+    }
+
+    // 2. Tạo CameraManager và quản lý vòng đời của nó
+    val cameraManager = remember {
+        CameraManager(
+            context = context,
+            lifecycleOwner = lifecycleOwner,
+            onFrameAnalyzed = { image ->
+                // ĐÂY LÀ NƠI PHÉP MÀU XẢY RA
+
+                // TODO: Gọi model YOLO của bạn tại đây
+                // if (recognizer.isInitialized()) {
+                //    recognizer.runYolo(image)
+                // }
+
+                // Rất quan trọng: Phải đóng image sau khi dùng xong
+                // để CameraX gửi frame tiếp theo.
+                image.close()
+            }
+        )
+    }
+
+    // 3. Sử dụng LaunchedEffect để khởi động camera khi Composable xuất hiện
+    LaunchedEffect(previewView) {
+        cameraManager.startCamera(previewView.surfaceProvider)
+    }
+
+    // 4. Sử dụng DisposableEffect để dừng camera khi Composable biến mất
+    DisposableEffect(Unit) {
+        onDispose {
+            cameraManager.stopCamera()
+        }
+    }
+
+    // 5. Sử dụng AndroidView để nhúng PreviewView vào Compose
+    AndroidView(
+        factory = { previewView },
+        modifier = Modifier.fillMaxSize()
     )
 }
 
-@Preview(showBackground = true)
+// Composable đơn giản để xin quyền
 @Composable
-fun GreetingPreview() {
-    CardrecognitionTheme {
-        Greeting("Android")
+fun PermissionRequestScreen(onRequestPermission: () -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Button(onClick = onRequestPermission) {
+            Text(text = "Cấp quyền Camera")
+        }
     }
 }
