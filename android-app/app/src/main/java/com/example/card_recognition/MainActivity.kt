@@ -85,6 +85,9 @@ class MainActivity : ComponentActivity() {
                 // TEST: Extract embedding từ parrot.png
                 testExtractEmbedding()
 
+                // TEST: Detect objects từ parrot.png
+                testDetection()
+
             } catch (e: Exception) {
                 Log.e(TAG, "Lỗi khi khởi tạo model", e)
             }
@@ -173,6 +176,49 @@ class MainActivity : ComponentActivity() {
         // Clean up
         testBitmap.recycle()
         Log.i(TAG, "=== KẾT THÚC TEST ===")
+    }
+
+    /**
+     * Test function: Detect objects từ parrot.png
+     */
+    private fun testDetection() {
+        Log.i(TAG, "=== BẮT ĐẦU TEST DETECTION ===")
+
+        val testBitmap = loadBitmapFromAssets("parrot.png")
+
+        if (testBitmap == null) {
+            Log.e(TAG, "Không thể load parrot.png từ assets")
+            return
+        }
+
+        Log.i(TAG, "Loaded parrot.png: ${testBitmap.width}x${testBitmap.height}")
+
+        // Detect objects
+        val detections = detector.detect(testBitmap, confThreshold = 0.25f, iouThreshold = 0.45f)
+
+        if (detections != null) {
+            Log.i(TAG, "✅ Detection THÀNH CÔNG!")
+            Log.i(TAG, "Số lượng objects: ${detections.size}")
+            
+            detections.forEachIndexed { index, detection ->
+                Log.i(TAG, "--- Detection $index ---")
+                Log.i(TAG, "  Class: ${detection.className}")
+                Log.i(TAG, "  Confidence: ${detection.confidence}")
+                Log.i(TAG, "  BBox: [${detection.bbox.joinToString(", ")}]")
+            }
+            
+            // So sánh với Python result:
+            Log.i(TAG, "")
+            Log.i(TAG, "=== SO SÁNH VỚI PYTHON ===")
+            Log.i(TAG, "Python result: 640x576 1 card, 79.8ms")
+            Log.i(TAG, "Android result: ${testBitmap.width}x${testBitmap.height} ${detections.size} card")
+        } else {
+            Log.e(TAG, "❌ Detection THẤT BẠI")
+        }
+
+        // Clean up
+        testBitmap.recycle()
+        Log.i(TAG, "=== KẾT THÚC TEST DETECTION ===")
     }
 }
 
