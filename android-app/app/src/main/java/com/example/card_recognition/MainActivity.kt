@@ -42,8 +42,9 @@ class MainActivity : ComponentActivity() {
         private const val TAG = "MainActivity"
     }
 
-    // 1. Khai báo một thuộc tính để giữ đối tượng Recognizer
+    // 1. Khai báo một thuộc tính để giữ đối tượng Recognizer và Detector
     private lateinit var recognizer: Recognizer
+    private lateinit var detector: Detector
 
     // Biến trạng thái để theo dõi quyền camera
     private var hasCameraPermission by mutableStateOf(false)
@@ -64,23 +65,28 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 2. Khởi tạo Recognizer
+        // 2. Khởi tạo Recognizer và Detector
         recognizer = Recognizer()
         Log.i(TAG, "Recognizer instance created.")
+        detector = Detector()
+        Log.i(TAG, "Detector instance created.")
 
         // 3. ✅ GỌI TRÊN LUỒNG NỀN (IO) BẰNG COROUTINE
         lifecycleScope.launch(Dispatchers.IO) {
-            Log.i(TAG, "Bắt đầu khởi tạo Recognizer trên luồng IO...")
+            Log.i(TAG, "Bắt đầu khởi tạo Recognizer và Detector trên luồng IO...")
             try {
                 // this@MainActivity là context của Activity
                 recognizer.initialize(this@MainActivity, useNNAPI = true)
                 Log.i(TAG, "Recognizer đã khởi tạo thành công.")
 
+                detector.initialize(this@MainActivity, useNNAPI = true)
+                Log.i(TAG, "Detector đã khởi tạo thành công.")
+
                 // TEST: Extract embedding từ parrot.png
                 testExtractEmbedding()
 
             } catch (e: Exception) {
-                Log.e(TAG, "Lỗi khi khởi tạo Recognizer", e)
+                Log.e(TAG, "Lỗi khi khởi tạo model", e)
             }
         }
 
@@ -99,7 +105,7 @@ class MainActivity : ComponentActivity() {
                         // 3. Hiển thị nội dung dựa trên trạng thái quyền
                         if (hasCameraPermission) {
                             // Nếu có quyền, hiển thị Camera
-                            CameraScreen(recognizer = recognizer)
+                            CameraScreen(recognizer = recognizer, detector = detector)
                         } else {
                             // Nếu không, hiển thị nút xin quyền
                             PermissionRequestScreen {
@@ -139,31 +145,31 @@ class MainActivity : ComponentActivity() {
      */
     private fun testExtractEmbedding() {
         Log.i(TAG, "=== BẮT ĐẦU TEST EXTRACT EMBEDDING ===")
-        
+
         val testBitmap = loadBitmapFromAssets("parrot.png")
-        
+
         if (testBitmap == null) {
             Log.e(TAG, "Không thể load test.jpg từ assets")
             return
         }
-        
+
         Log.i(TAG, "Loaded test.jpg: ${testBitmap.width}x${testBitmap.height}")
-        
+
         // Extract embedding
         val embedding = recognizer.extractEmbedding(testBitmap)
-        
+
         if (embedding != null) {
             Log.i(TAG, "✅ Extract embedding THÀNH CÔNG!")
             Log.i(TAG, "Embedding size: ${embedding.size}")
             Log.i(TAG, "First 10 values: ${embedding.take(10).joinToString(", ")}")
-            
+
             // Tính norm của embedding để verify
             val norm = kotlin.math.sqrt(embedding.map { it * it }.sum())
             Log.i(TAG, "Embedding norm: $norm")
         } else {
             Log.e(TAG, "❌ Extract embedding THẤT BẠI")
         }
-        
+
         // Clean up
         testBitmap.recycle()
         Log.i(TAG, "=== KẾT THÚC TEST ===")
@@ -172,7 +178,7 @@ class MainActivity : ComponentActivity() {
 
 // Composable để hiển thị camera và xử lý frame
 @Composable
-fun CameraScreen(recognizer: Recognizer) {
+fun CameraScreen(recognizer: Recognizer, detector: Detector) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -191,9 +197,10 @@ fun CameraScreen(recognizer: Recognizer) {
             onFrameAnalyzed = { image ->
                 // ĐÂY LÀ NƠI PHÉP MÀU XẢY RA
 
-                // TODO: Gọi model YOLO của bạn tại đây
-                // if (recognizer.isInitialized()) {
-                //    recognizer.runYolo(image)
+                // Gọi model YOLO để phát hiện đối tượng
+                // if (detector.isInitialized()) { // Giả sử có hàm isInitialized
+                //    val results = detector.detect(image)
+                //    // Xử lý kết quả phát hiện ở đây...
                 // }
 
                 // Rất quan trọng: Phải đóng image sau khi dùng xong

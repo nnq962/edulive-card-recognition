@@ -29,7 +29,7 @@ class Recognizer {
 
     /**
      * Khởi tạo OrtEnvironment và OrtSession để load model.
-     * Hãy gọi hàm này từ Activity hoặc ViewModel của bạn (ví dụ: trong onCreate).
+     * Tự động thử NNAPI trước, nếu thất bại sẽ chuyển sang CPU.
      */
     fun initialize(context: Context, useNNAPI: Boolean = true) {
         // Chỉ khởi tạo một lần
@@ -38,61 +38,59 @@ class Recognizer {
             return
         }
 
-        // BẮT ĐẦU ĐO THỜI GIAN
         val startTime = System.currentTimeMillis()
-
         try {
             ortEnvironment = OrtEnvironment.getEnvironment()
-            val sessionOptions = OrtSession.SessionOptions()
-
-            // BỔ SUNG 1: BẬT/TẮT NNAPI DỰA TRÊN FLAG
-            var providerInfo = "CPU (Mặc định)"
-            if (useNNAPI) {
-                try {
-                    sessionOptions.addNnapi()
-                    providerInfo = "NNAPI (Đã yêu cầu)"
-                    Log.i(TAG, "Đã yêu cầu sử dụng NNAPI.")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Không thể bật NNAPI (thiết bị/model không hỗ trợ).", e)
-                    providerInfo = "CPU (Không thể bật NNAPI)" // Log rõ hơn
-                }
-            } else {
-                Log.i(TAG, "Đã chủ động không sử dụng NNAPI (chỉ dùng CPU).")
-            }
-            // KẾT THÚC BỔ SUNG 1
-
-            Log.i(TAG, "Đang load model: $MODEL_ASSET_NAME")
             val modelBytes = loadModelBytesFromAssets(context, MODEL_ASSET_NAME)
 
+            // 1. Cố gắng khởi tạo với NNAPI trước nếu được yêu cầu
+            if (useNNAPI) {
+                try {
+                    Log.i(TAG, "Đang thử khởi tạo session với NNAPI...")
+                    val sessionOptions = OrtSession.SessionOptions()
+                    sessionOptions.addNnapi()
+                    ortSession = ortEnvironment!!.createSession(modelBytes, sessionOptions)
+                    logSuccess(startTime, "NNAPI")
+                    return // Thành công với NNAPI, thoát khỏi hàm
+                } catch (e: kotlin.Exception) {
+                    Log.w(TAG, "Không thể khởi tạo session với NNAPI, sẽ thử lại với CPU.", e)
+                    ortSession?.close() // Dọn dẹp nếu có lỗi
+                    ortSession = null
+                }
+            }
+
+            // 2. Nếu code chạy đến đây, nghĩa là NNAPI thất bại hoặc không được yêu cầu.
+            // Thử khởi tạo với CPU (mặc định).
+            Log.i(TAG, "Đang khởi tạo session với CPU...")
+            val sessionOptions = OrtSession.SessionOptions()
             ortSession = ortEnvironment!!.createSession(modelBytes, sessionOptions)
+            logSuccess(startTime, "CPU")
 
-            // BỔ SUNG 2: TÍNH TOÁN VÀ LOG THỜI GIAN
-            val duration = System.currentTimeMillis() - startTime
-            Log.i(TAG, "Load model ONNX thành công.")
-            Log.i(TAG, "Provider đã được cấu hình: $providerInfo")
-            Log.i(TAG, "Thời gian load model: $duration ms") // <-- LOG MỚI
-            // KẾT THÚC BỔ SUNG 2
+        } catch (e: kotlin.Exception) {
+            Log.e(TAG, "Lỗi nghiêm trọng: Không thể khởi tạo session ngay cả với CPU.", e)
+        }
+    }
 
-            // Phần log chi tiết (Giữ nguyên)
-            val inputInfo = ortSession?.inputInfo
-            val outputInfo = ortSession?.outputInfo
+    /**
+     * Hàm trợ giúp để log thông tin khi khởi tạo thành công.
+     */
+    private fun logSuccess(startTime: Long, providerInfo: String) {
+        val duration = System.currentTimeMillis() - startTime
+        Log.i(TAG, "Load model ONNX thành công.")
+        Log.i(TAG, "Provider đã được cấu hình: $providerInfo")
+        Log.i(TAG, "Thời gian load model: $duration ms")
 
-            Log.i(TAG, "--- Input Info (Chi tiết) ---")
-            inputInfo?.forEach { (name, info) ->
-                Log.i(TAG, "Name: $name")
-                Log.i(TAG, "Info: ${info.info}")
-            }
+        val inputInfo = ortSession?.inputInfo
+        val outputInfo = ortSession?.outputInfo
 
-            Log.i(TAG, "--- Output Info (Chi tiết) ---")
-            outputInfo?.forEach { (name, info) ->
-                Log.i(TAG, "Name: $name")
-                Log.i(TAG, "Info: ${info.info}")
-            }
+        Log.i(TAG, "--- Input Info (Chi tiết) ---")
+        inputInfo?.forEach { (name, info) ->
+            Log.i(TAG, "Name: $name, Info: ${info.info}")
+        }
 
-        } catch (e: IOException) {
-            Log.e(TAG, "Lỗi khi đọc file model từ assets.", e)
-        } catch (e: Exception) {
-            Log.e(TAG, "Lỗi khi khởi tạo ONNX session.", e)
+        Log.i(TAG, "--- Output Info (Chi tiết) ---")
+        outputInfo?.forEach { (name, info) ->
+            Log.i(TAG, "Name: $name, Info: ${info.info}")
         }
     }
 
