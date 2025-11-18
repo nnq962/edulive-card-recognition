@@ -70,13 +70,13 @@ class Recognizer {
             Log.i(TAG, "--- Input Info (Chi tiết) ---")
             inputInfo?.forEach { (name, info) ->
                 Log.i(TAG, "Name: $name")
-                Log.i(TAG, "Info: ${info.info.toString()}")
+                Log.i(TAG, "Info: ${info.info}")
             }
 
             Log.i(TAG, "--- Output Info (Chi tiết) ---")
             outputInfo?.forEach { (name, info) ->
                 Log.i(TAG, "Name: $name")
-                Log.i(TAG, "Info: ${info.info.toString()}")
+                Log.i(TAG, "Info: ${info.info}")
             }
 
         } catch (e: IOException) {
