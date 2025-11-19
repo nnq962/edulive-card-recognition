@@ -286,35 +286,34 @@ fun CameraScreen(
                         if (results != null && results.isNotEmpty() && currentEmbeddingData != null) {
                             results.forEach { detection ->
                                 try {
-                                    // Crop bbox với padding nhỏ
-                                    val padding = 5
-                                    val x1 = (detection.bbox[0] - padding).coerceAtLeast(0f).toInt()
-                                    val y1 = (detection.bbox[1] - padding).coerceAtLeast(0f).toInt()
-                                    val x2 = (detection.bbox[2] + padding).coerceAtMost(imgWidth.toFloat()).toInt()
-                                    val y2 = (detection.bbox[3] + padding).coerceAtMost(imgHeight.toFloat()).toInt()
-                                    
+                                    // Crop bbox KHÔNG padding (giống Python)
+                                    val x1 = detection.bbox[0].toInt().coerceAtLeast(0)
+                                    val y1 = detection.bbox[1].toInt().coerceAtLeast(0)
+                                    val x2 = detection.bbox[2].toInt().coerceAtMost(imgWidth)
+                                    val y2 = detection.bbox[3].toInt().coerceAtMost(imgHeight)
+
                                     val width = x2 - x1
                                     val height = y2 - y1
-                                    
+
                                     if (width > 0 && height > 0) {
                                         val croppedBitmap = Bitmap.createBitmap(bitmap, x1, y1, width, height)
-                                        
+
                                         // Extract embedding
                                         val embedding = recognizer.extractEmbedding(croppedBitmap)
                                         croppedBitmap.recycle()
-                                        
+
                                         if (embedding != null) {
                                             // Find best match
                                             val matchResult = currentEmbeddingData.findBestMatch(
                                                 queryEmbedding = embedding,
                                                 threshold = 0.75f
                                             )
-                                            
+
                                             val category = matchResult.category ?: "Unknown"
                                             recResults.add(
                                                 RecognitionResult(
                                                     category = category,
-                                                    detConf = detection.confidence,  // Fix: conf not confidence
+                                                    detConf = detection.confidence,
                                                     recConf = matchResult.similarity,
                                                     bbox = detection.bbox
                                                 )
