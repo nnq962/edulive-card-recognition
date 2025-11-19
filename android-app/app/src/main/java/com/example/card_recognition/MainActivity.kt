@@ -23,6 +23,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -46,6 +47,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.graphics.Matrix
 import android.graphics.RectF
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
@@ -191,9 +193,9 @@ fun CameraScreen(
     var sourceImageSize by remember { mutableStateOf(Pair(1, 1)) } // width, height
     var isProcessing by remember { mutableStateOf(false) } // Flag để skip frames
     var frameCount by remember { mutableIntStateOf(0) }
-    var detectionTime by remember { mutableStateOf(0L) } // Thời gian detection (ms)
-    var recTime by remember { mutableStateOf(0L) } // Thời gian recognition (ms)
-    var rotationDegrees by remember { mutableStateOf(0) } // Camera rotation
+    var detectionTime by remember { mutableLongStateOf(0L) } // Thời gian detection (ms)
+    var recTime by remember { mutableLongStateOf(0L) } // Thời gian recognition (ms)
+    var rotationDegrees by remember { mutableIntStateOf(0) } // Camera rotation
 
     // 1. Tạo PreviewView (View truyền thống) để CameraX hiển thị
     val previewView = remember {
@@ -482,7 +484,7 @@ fun DebugLine(
             // 2b. Nếu đã ready -> Hiển thị Thời gian + Hardware như cũ
             val timeColor = if (timeMs > 100) Color(0xFFFFE082) else Color(0xFF69F0AE)
             Text(
-                text = String.format("%.3fs ", timeMs / 1000f),
+                text = String.format(Locale.US, "%.3fs ", timeMs / 1000f),
                 style = TextStyle(color = timeColor, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, fontSize = 14.sp)
             )
 
