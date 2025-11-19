@@ -47,6 +47,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.graphics.Matrix
 import android.graphics.RectF
+import androidx.compose.ui.graphics.nativeCanvas
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
@@ -58,6 +59,8 @@ class MainActivity : ComponentActivity() {
     // 1. Khai báo một thuộc tính để giữ đối tượng Recognizer và Detector
     private lateinit var recognizer: Recognizer
     private lateinit var detector: Detector
+    var embeddingData: EmbeddingData? by mutableStateOf(null)  // Thêm embeddingData
+    
     private var isRecognizerReady by mutableStateOf(false)
     private var isDetectorReady by mutableStateOf(false)
     private var detHardwareInfo by mutableStateOf("Loading...")
@@ -88,7 +91,7 @@ class MainActivity : ComponentActivity() {
         recognizer = Recognizer()
         detector = Detector()
         // Cấu hình phần cứng mong muốn
-        val useNNAPIForDet = true // Ví dụ: Detector dùng CPU
+        val useNNAPIForDet = false // Ví dụ: Detector dùng CPU
         val useNNAPIForRec = true  // Ví dụ: Recognizer dùng NNAPI
 
         // 3. ✅ GỌI TRÊN LUỒNG NỀN (IO) BẰNG COROUTINE
@@ -97,14 +100,24 @@ class MainActivity : ComponentActivity() {
                 // this@MainActivity là context của Activity
                 detector.initialize(this@MainActivity, useNNAPI = useNNAPIForDet)
                 recognizer.initialize(this@MainActivity, useNNAPI = useNNAPIForRec)
+                
+                // Load embedding data
+                val data = EmbeddingData.loadFromAssets(this@MainActivity, "data.json")
 
-                // 2. Cập nhật text hiển thị sau khi init thành công
-                isDetectorReady = true
-                isRecognizerReady = true
-                detHardwareInfo = if (useNNAPIForDet) "NNAPI" else "CPU"
-                recHardwareInfo = if (useNNAPIForRec) "NNAPI" else "CPU"
-
-                Log.i(TAG, "Models đã khởi tạo thành công.")
+                // 2. Cập nhật text hiển thị sau khi init thành công (trên Main thread)
+                withContext(Dispatchers.Main) {
+                    embeddingData = data
+                    isDetectorReady = true
+                    isRecognizerReady = true
+                    detHardwareInfo = if (useNNAPIForDet) "NNAPI" else "CPU"
+                    recHardwareInfo = if (useNNAPIForRec) "NNAPI" else "CPU"
+                    
+                    if (data != null) {
+                        Log.i(TAG, "Models + EmbeddingData đã khởi tạo thành công (${data.getCategoryCount()} categories)")
+                    } else {
+                        Log.w(TAG, "Models init OK, nhưng EmbeddingData load failed")
+                    }
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Lỗi khi khởi tạo model", e)
             }
@@ -175,6 +188,15 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Data class để lưu kết quả recognition
+@Suppress("ArrayInDataClass")
+data class RecognitionResult(
+    val category: String,
+    val detConf: Float,
+    val recConf: Float,
+    val bbox: FloatArray
+)
+
 // Composable để hiển thị camera và xử lý frame
 @Composable
 fun CameraScreen(
@@ -182,14 +204,19 @@ fun CameraScreen(
     detector: Detector,
     isDetectorReady: Boolean,
     isRecognizerReady: Boolean,
-    detHardware: String, // Nhận thông tin Hardware
+    detHardware: String,
     recHardware: String
 ) {
     val context = LocalContext.current
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    
+    // Lấy embeddingData từ MainActivity
+    val mainActivity = context as MainActivity
+    val embeddingData = mainActivity.embeddingData
+
 
     // State lưu trữ danh sách bounding box và kích thước ảnh gốc để vẽ
-    var detections by remember { mutableStateOf(emptyList<Detector.Detection>()) }
+    var recognitionResults by remember { mutableStateOf(emptyList<RecognitionResult>()) }
     var sourceImageSize by remember { mutableStateOf(Pair(1, 1)) } // width, height
     var isProcessing by remember { mutableStateOf(false) } // Flag để skip frames
     var frameCount by remember { mutableIntStateOf(0) }
@@ -210,16 +237,16 @@ fun CameraScreen(
     }
 
     // 2. Tạo CameraManager và quản lý vòng đời của nó
-    val cameraManager = remember {
+    // QUAN TRỌNG: Thêm embeddingData vào key để recreate khi embeddingData thay đổi
+    val cameraManager = remember(embeddingData) {
         CameraManager(
             context = context,
             lifecycleOwner = lifecycleOwner,
             onFrameAnalyzed = { imageProxy ->
                 frameCount++
                 
-                // SKIP FRAME nếu đang xử lý hoặc detector chưa sẵn sàng
-                if (isProcessing || !detector.isInitialized()) {
-                    Log.d("CameraScreen", "Skipping frame $frameCount - processing: $isProcessing")
+                // SKIP FRAME nếu đang xử lý hoặc chưa sẵn sàng
+                if (isProcessing || !detector.isInitialized() || !recognizer.isInitialized() || mainActivity.embeddingData == null) {
                     imageProxy.close()
                     return@CameraManager
                 }
@@ -232,7 +259,7 @@ fun CameraScreen(
                         Log.d("CameraScreen", "Processing frame $frameCount")
                         
                         // Chuyển đổi ImageProxy sang Bitmap KHÔNG ROTATE
-                        val mainActivity = context as MainActivity
+                        // val mainActivity = context as MainActivity  <-- REMOVED (Không cần cast lại vì đã có ở trên)
                         val bitmap = mainActivity.imageProxyToBitmap(imageProxy)
                         
                         // Lưu rotation degrees để transform bbox sau
@@ -248,17 +275,74 @@ fun CameraScreen(
                         val results = detector.detect(bitmap, 0.80f)
                         val detectionDuration = System.currentTimeMillis() - detectionStartTime
 
+                        // Recognition pipeline (chỉ chạy nếu có embeddingData)
+                        val recognitionStartTime = System.currentTimeMillis()
+                        val recResults = mutableListOf<RecognitionResult>()
+                        
+                        // ⚠️ CRITICAL: Phải lấy embeddingData trực tiếp từ mainActivity
+                        val currentEmbeddingData = mainActivity.embeddingData
+                        Log.d("CameraScreen", "Starting recognition: results=${results?.size}, embeddingData=${currentEmbeddingData != null}")
+                        
+                        if (results != null && results.isNotEmpty() && currentEmbeddingData != null) {
+                            results.forEach { detection ->
+                                try {
+                                    // Crop bbox với padding nhỏ
+                                    val padding = 5
+                                    val x1 = (detection.bbox[0] - padding).coerceAtLeast(0f).toInt()
+                                    val y1 = (detection.bbox[1] - padding).coerceAtLeast(0f).toInt()
+                                    val x2 = (detection.bbox[2] + padding).coerceAtMost(imgWidth.toFloat()).toInt()
+                                    val y2 = (detection.bbox[3] + padding).coerceAtMost(imgHeight.toFloat()).toInt()
+                                    
+                                    val width = x2 - x1
+                                    val height = y2 - y1
+                                    
+                                    if (width > 0 && height > 0) {
+                                        val croppedBitmap = Bitmap.createBitmap(bitmap, x1, y1, width, height)
+                                        
+                                        // Extract embedding
+                                        val embedding = recognizer.extractEmbedding(croppedBitmap)
+                                        croppedBitmap.recycle()
+                                        
+                                        if (embedding != null) {
+                                            // Find best match
+                                            val matchResult = currentEmbeddingData.findBestMatch(
+                                                queryEmbedding = embedding,
+                                                threshold = 0.75f
+                                            )
+                                            
+                                            val category = matchResult.category ?: "Unknown"
+                                            recResults.add(
+                                                RecognitionResult(
+                                                    category = category,
+                                                    detConf = detection.confidence,  // Fix: conf not confidence
+                                                    recConf = matchResult.similarity,
+                                                    bbox = detection.bbox
+                                                )
+                                            )
+                                            Log.d("CameraScreen", "Recognized: $category (det=${detection.confidence}, rec=${matchResult.similarity})")
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("CameraScreen", "Error in recognition for detection", e)
+                                }
+                            }
+                        }
+                        
+                        val recognitionDuration = System.currentTimeMillis() - recognitionStartTime
+
                         // Cập nhật State
                         withContext(Dispatchers.Main) {
                             if (results != null && results.isNotEmpty()) {
-                                detections = results
+                                recognitionResults = recResults
                                 sourceImageSize = Pair(imgWidth, imgHeight)
                                 detectionTime = detectionDuration
+                                recTime = recognitionDuration
                                 rotationDegrees = currentRotation
-                                Log.d("CameraScreen", "Detected ${results.size} objects in ${detectionDuration}ms")
+                                Log.d("CameraScreen", "Detected ${results.size} objects in ${detectionDuration}ms, Recognized ${recResults.size} in ${recognitionDuration}ms")
                             } else {
-                                detections = emptyList()
+                                recognitionResults = emptyList()
                                 detectionTime = detectionDuration
+                                recTime = 0L
                                 rotationDegrees = currentRotation
                             }
                         }
@@ -300,7 +384,7 @@ fun CameraScreen(
 
         // 6. Lớp phủ vẽ Bounding Box
         BoundingBoxOverlay(
-            detections = detections,
+            recognitionResults = recognitionResults,
             sourceWidth = sourceImageSize.first,
             sourceHeight = sourceImageSize.second,
             rotationDegrees = rotationDegrees
@@ -323,7 +407,7 @@ fun CameraScreen(
 
 @Composable
 fun BoundingBoxOverlay(
-    detections: List<Detector.Detection>,
+    recognitionResults: List<RecognitionResult>,
     sourceWidth: Int,
     sourceHeight: Int,
     rotationDegrees: Int
@@ -333,14 +417,12 @@ fun BoundingBoxOverlay(
         val canvasHeight = size.height
 
         // 1. Tính kích thước "ảo" sau khi xoay ảnh gốc
-        // Ví dụ: Ảnh gốc 1280x720, Xoay 90 -> "ảo" là 720x1280
         val (rotatedWidth, rotatedHeight) = when (rotationDegrees) {
             90, 270 -> Pair(sourceHeight.toFloat(), sourceWidth.toFloat())
             else -> Pair(sourceWidth.toFloat(), sourceHeight.toFloat())
         }
 
         // 2. Tính tỷ lệ scale để lấp đầy màn hình (FILL)
-        // Dùng MAX để đảm bảo ảnh phủ kín màn hình (giống behavior của Camera Preview)
         val scaleX = canvasWidth / rotatedWidth
         val scaleY = canvasHeight / rotatedHeight
         val scale = kotlin.math.max(scaleX, scaleY)
@@ -351,55 +433,72 @@ fun BoundingBoxOverlay(
         val offsetX = (canvasWidth - scaledWidth) / 2
         val offsetY = (canvasHeight - scaledHeight) / 2
 
-        if (detections.isNotEmpty()) {
-            Log.d("BoundingBox", "--- FRAME START ---")
-            Log.d("BoundingBox", "Canvas: ${canvasWidth}x${canvasHeight}")
-            Log.d("BoundingBox", "Source: ${sourceWidth}x${sourceHeight} (Rot: $rotationDegrees)")
-            Log.d("BoundingBox", "Rotated Source: ${rotatedWidth}x${rotatedHeight}")
-            Log.d("BoundingBox", "Scale: $scale (ScaleX: $scaleX, ScaleY: $scaleY)")
-            Log.d("BoundingBox", "Offset: X=$offsetX, Y=$offsetY")
-        }
-
         // 4. Thiết lập Ma trận biến đổi (Matrix)
         val matrix = Matrix()
-
-        // B1: Đưa về gốc (0,0) và Xoay
-        // Lưu ý: postRotate xoay quanh (0,0)
         matrix.postRotate(rotationDegrees.toFloat())
-
-        // B2: Dịch chuyển ảnh về vùng dương sau khi xoay (nếu cần)
         when (rotationDegrees) {
-            90 -> matrix.postTranslate(rotatedWidth, 0f)   // Xoay 90: (h, w) -> đẩy x thêm h (vì h là width mới)
+            90 -> matrix.postTranslate(rotatedWidth, 0f)
             180 -> matrix.postTranslate(rotatedWidth, rotatedHeight)
             270 -> matrix.postTranslate(0f, rotatedHeight)
         }
-
-        // B3: Scale phóng to
         matrix.postScale(scale, scale)
-
-        // B4: Dịch chuyển vào giữa màn hình
         matrix.postTranslate(offsetX, offsetY)
 
-        detections.forEachIndexed { index, detection ->
-            val bbox = detection.bbox // [x1, y1, x2, y2] trên ảnh gốc (landscape)
+        // 5. Vẽ bounding boxes và labels
+        recognitionResults.forEach { result ->
+            val bbox = result.bbox
             val rect = RectF(bbox[0], bbox[1], bbox[2], bbox[3])
-
-            // Log trước khi map
-            val originalStr = "[${rect.left}, ${rect.top}, ${rect.right}, ${rect.bottom}]"
-
-            // Áp dụng ma trận
             matrix.mapRect(rect)
 
-            // Log sau khi map
-            Log.d("BoundingBox", "Det #$index: Orig=$originalStr")
-            Log.d("BoundingBox", "       -> Screen=[${rect.left}, ${rect.top}, ${rect.right}, ${rect.bottom}]")
-
-            // Vẽ
+            // Xác định màu: Xanh lá (match) / Đỏ (unknown)
+            val boxColor = if (result.category != "Unknown") Color.Green else Color.Red
+            
+            // Vẽ bbox
             drawRect(
-                color = Color.Green,
+                color = boxColor,
                 topLeft = Offset(rect.left, rect.top),
                 size = Size(rect.width(), rect.height()),
                 style = Stroke(width = 3.dp.toPx())
+            )
+            
+            // Vẽ label background (semi-transparent black)
+            val labelText1 = "[${result.category}]"
+            val labelText2 = "[D: %.2f] [R: %.2f]".format(result.detConf, result.recConf)
+            
+            val textPaint = android.graphics.Paint().apply {
+                color = android.graphics.Color.WHITE
+                textSize = 14.sp.toPx()
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                isAntiAlias = true
+            }
+            
+            val labelWidth1 = textPaint.measureText(labelText1)
+            val labelWidth2 = textPaint.measureText(labelText2)
+            val maxLabelWidth = kotlin.math.max(labelWidth1, labelWidth2)
+            val labelHeight = textPaint.textSize * 2.5f
+            val padding = 4.dp.toPx()
+            
+            // Vẽ background cho label
+            drawRect(
+                color = Color.Black.copy(alpha = 0.7f),
+                topLeft = Offset(rect.left, rect.top - labelHeight - padding),
+                size = Size(maxLabelWidth + padding * 2, labelHeight + padding)
+            )
+            
+            // Vẽ text line 1 (category)
+            drawContext.canvas.nativeCanvas.drawText(
+                labelText1,
+                rect.left + padding,
+                rect.top - labelHeight + textPaint.textSize - padding,
+                textPaint
+            )
+            
+            // Vẽ text line 2 (confidences)
+            drawContext.canvas.nativeCanvas.drawText(
+                labelText2,
+                rect.left + padding,
+                rect.top - padding,
+                textPaint
             )
         }
     }
