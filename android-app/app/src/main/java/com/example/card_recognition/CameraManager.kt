@@ -55,7 +55,7 @@ class CameraManager(
                     .also {
                         it.setAnalyzer(analysisExecutor) { image ->
                             // Log độ phân giải của frame
-//                            Log.i(TAG, "Frame resolution: ${image.width}x${image.height}")
+                            Log.i(TAG, "Frame resolution: ${image.width}x${image.height}")
                             // Đây là nơi frame được gửi đi
                             onFrameAnalyzed(image)
                             // Lưu ý: image.close() sẽ được gọi ở nơi nhận (MainActivity)
