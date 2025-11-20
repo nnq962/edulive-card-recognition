@@ -45,8 +45,7 @@ import com.example.card_recognition.ui.theme.CardrecognitionTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import android.graphics.Matrix
-import android.graphics.RectF
+
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.graphics.nativeCanvas
 import java.util.Locale
@@ -93,7 +92,7 @@ class MainActivity : ComponentActivity() {
         detector = Detector()
         // Cấu hình phần cứng mong muốn
         val useNNAPIForDet = false // Ví dụ: Detector dùng CPU
-        val useNNAPIForRec = true  // Ví dụ: Recognizer dùng NNAPI
+        val useNNAPIForRec = false  // Ví dụ: Recognizer dùng NNAPI
 
         // 3. ✅ GỌI TRÊN LUỒNG NỀN (IO) BẰNG COROUTINE
         lifecycleScope.launch(Dispatchers.IO) {
@@ -216,21 +215,18 @@ fun CameraScreen(
     val embeddingData = mainActivity.embeddingData
 
 
-    // State lưu trữ danh sách bounding box và kích thước ảnh gốc để vẽ
+    // State lưu trữ danh sách bounding box
     var recognitionResults by remember { mutableStateOf(emptyList<RecognitionResult>()) }
-    var sourceImageSize by remember { mutableStateOf(Pair(1, 1)) } // width, height
     var isProcessing by remember { mutableStateOf(false) } // Flag để skip frames
     var frameCount by remember { mutableIntStateOf(0) }
     var detectionTime by remember { mutableLongStateOf(0L) } // Thời gian detection (ms)
     var recTime by remember { mutableLongStateOf(0L) } // Thời gian recognition (ms)
-    var rotationDegrees by remember { mutableIntStateOf(0) } // Camera rotation
 
     // 1. Tạo PreviewView (View truyền thống) để CameraX hiển thị
     val previewView = remember {
         PreviewView(context).apply {
-            // QUAN TRỌNG: Ép buộc hiển thị kiểu Lấp đầy và Căn giữa
-            // Để khớp với logic tính toán offset trong BoundingBoxOverlay
-            scaleType = PreviewView.ScaleType.FILL_CENTER
+            // ✅ FIT_CENTER: Giữ tỷ lệ gốc, có letterbox nếu cần
+            scaleType = PreviewView.ScaleType.FIT_CENTER
 
             // Đảm bảo render tương thích để tránh bị méo trên một số thiết bị
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
@@ -263,13 +259,10 @@ fun CameraScreen(
                         // val mainActivity = context as MainActivity  <-- REMOVED (Không cần cast lại vì đã có ở trên)
                         val bitmap = mainActivity.imageProxyToBitmap(imageProxy)
                         
-                        // Lưu rotation degrees để transform bbox sau
-                        val currentRotation = imageProxy.imageInfo.rotationDegrees
-                        
                         val imgWidth = bitmap.width
                         val imgHeight = bitmap.height
                         
-                        Log.d("CameraScreen", "Bitmap size: ${imgWidth}x${imgHeight}, rotation: $currentRotation")
+                        Log.d("CameraScreen", "Bitmap size: ${imgWidth}x${imgHeight}")
 
                         // Gọi detection và đo thời gian
                         val detectionStartTime = System.currentTimeMillis()
@@ -334,16 +327,13 @@ fun CameraScreen(
                         withContext(Dispatchers.Main) {
                             if (results != null && results.isNotEmpty()) {
                                 recognitionResults = recResults
-                                sourceImageSize = Pair(imgWidth, imgHeight)
                                 detectionTime = detectionDuration
                                 recTime = recognitionDuration
-                                rotationDegrees = currentRotation
                                 Log.d("CameraScreen", "Detected ${results.size} objects in ${detectionDuration}ms, Recognized ${recResults.size} in ${recognitionDuration}ms")
                             } else {
                                 recognitionResults = emptyList()
                                 detectionTime = detectionDuration
                                 recTime = 0L
-                                rotationDegrees = currentRotation
                             }
                         }
                         
@@ -384,10 +374,7 @@ fun CameraScreen(
 
         // 6. Lớp phủ vẽ Bounding Box
         BoundingBoxOverlay(
-            recognitionResults = recognitionResults,
-            sourceWidth = sourceImageSize.first,
-            sourceHeight = sourceImageSize.second,
-            rotationDegrees = rotationDegrees
+            recognitionResults = recognitionResults
         )
 
         // 7. PANEL THÔNG TIN DEBUG (Góc trên trái)
@@ -407,48 +394,48 @@ fun CameraScreen(
 
 @Composable
 fun BoundingBoxOverlay(
-    recognitionResults: List<RecognitionResult>,
-    sourceWidth: Int,
-    sourceHeight: Int,
-    rotationDegrees: Int
+    recognitionResults: List<RecognitionResult>
 ) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val canvasWidth = size.width
         val canvasHeight = size.height
 
-        // 1. Tính kích thước "ảo" sau khi xoay ảnh gốc
-        val (rotatedWidth, rotatedHeight) = when (rotationDegrees) {
-            90, 270 -> Pair(sourceHeight.toFloat(), sourceWidth.toFloat())
-            else -> Pair(sourceWidth.toFloat(), sourceHeight.toFloat())
+        // Camera/YOLO resolution: 1280x720 (16:9)
+        val sourceWidth = 1280f
+        val sourceHeight = 720f
+        val sourceRatio = sourceWidth / sourceHeight
+
+        // Tính preview size thực tế khi FIT_CENTER (giữ tỷ lệ 16:9)
+        val canvasRatio = canvasWidth / canvasHeight
+        val (previewWidth, previewHeight) = if (canvasRatio > sourceRatio) {
+            // Canvas rộng hơn -> letterbox trái/phải
+            val h = canvasHeight
+            val w = h * sourceRatio
+            Pair(w, h)
+        } else {
+            // Canvas cao hơn -> letterbox trên/dưới
+            val w = canvasWidth
+            val h = w / sourceRatio
+            Pair(w, h)
         }
 
-        // 2. Tính tỷ lệ scale để lấp đầy màn hình (FILL)
-        val scaleX = canvasWidth / rotatedWidth
-        val scaleY = canvasHeight / rotatedHeight
-        val scale = kotlin.math.max(scaleX, scaleY)
+        // Tính offset để căn giữa preview
+        val offsetX = (canvasWidth - previewWidth) / 2f
+        val offsetY = (canvasHeight - previewHeight) / 2f
 
-        // 3. Tính Offset để căn giữa hình ảnh vào màn hình
-        val scaledWidth = rotatedWidth * scale
-        val scaledHeight = rotatedHeight * scale
-        val offsetX = (canvasWidth - scaledWidth) / 2
-        val offsetY = (canvasHeight - scaledHeight) / 2
+        // Scale từ 1280x720 lên preview size
+        val scaleX = previewWidth / sourceWidth
+        val scaleY = previewHeight / sourceHeight
 
-        // 4. Thiết lập Ma trận biến đổi (Matrix)
-        val matrix = Matrix()
-        matrix.postRotate(rotationDegrees.toFloat())
-        when (rotationDegrees) {
-            90 -> matrix.postTranslate(rotatedWidth, 0f)
-            180 -> matrix.postTranslate(rotatedWidth, rotatedHeight)
-            270 -> matrix.postTranslate(0f, rotatedHeight)
-        }
-        matrix.postScale(scale, scale)
-        matrix.postTranslate(offsetX, offsetY)
-
-        // 5. Vẽ bounding boxes và labels
+        // Vẽ bounding boxes và labels
         recognitionResults.forEach { result ->
             val bbox = result.bbox
-            val rect = RectF(bbox[0], bbox[1], bbox[2], bbox[3])
-            matrix.mapRect(rect)
+            
+            // Scale bbox từ 1280x720 lên preview size, sau đó cộng offset
+            val left = bbox[0] * scaleX + offsetX
+            val top = bbox[1] * scaleY + offsetY
+            val right = bbox[2] * scaleX + offsetX
+            val bottom = bbox[3] * scaleY + offsetY
 
             // Xác định màu: Xanh lá (match) / Đỏ (unknown)
             val boxColor = if (result.category != "Unknown") Color.Green else Color.Red
@@ -456,8 +443,8 @@ fun BoundingBoxOverlay(
             // Vẽ bbox
             drawRect(
                 color = boxColor,
-                topLeft = Offset(rect.left, rect.top),
-                size = Size(rect.width(), rect.height()),
+                topLeft = Offset(left, top),
+                size = Size(right - left, bottom - top),
                 style = Stroke(width = 3.dp.toPx())
             )
             
@@ -481,23 +468,23 @@ fun BoundingBoxOverlay(
             // Vẽ background cho label
             drawRect(
                 color = Color.Black.copy(alpha = 0.7f),
-                topLeft = Offset(rect.left, rect.top - labelHeight - padding),
+                topLeft = Offset(left, top - labelHeight - padding),
                 size = Size(maxLabelWidth + padding * 2, labelHeight + padding)
             )
             
             // Vẽ text line 1 (category)
             drawContext.canvas.nativeCanvas.drawText(
                 labelText1,
-                rect.left + padding,
-                rect.top - labelHeight + textPaint.textSize - padding,
+                left + padding,
+                top - labelHeight + textPaint.textSize - padding,
                 textPaint
             )
             
             // Vẽ text line 2 (confidences)
             drawContext.canvas.nativeCanvas.drawText(
                 labelText2,
-                rect.left + padding,
-                rect.top - padding,
+                left + padding,
+                top - padding,
                 textPaint
             )
         }
