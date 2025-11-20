@@ -47,6 +47,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.graphics.Matrix
 import android.graphics.RectF
+import androidx.compose.foundation.layout.width
 import androidx.compose.ui.graphics.nativeCanvas
 import java.util.Locale
 
@@ -515,6 +516,7 @@ fun PermissionRequestScreen(onRequestPermission: () -> Unit) {
         }
     }
 }
+
 @Composable
 fun DebugInfoPanel(
     modifier: Modifier = Modifier,
@@ -533,20 +535,26 @@ fun DebugInfoPanel(
         androidx.compose.foundation.layout.Column(
             modifier = Modifier.padding(8.dp)
         ) {
-            // Dòng 1: Detector Info (Truyền biến isDetectorReady)
+// Trong DebugInfoPanel
             DebugLine(
-                label = "DET",
-                isReady = isDetectorReady, // <--- Check riêng ở đây
+                label = "DET:",  // Không cần thêm dấu cách thừa nữa
+                isReady = isDetectorReady,
                 timeMs = detTimeMs,
-                hardware = detHardware
+                hardware = "[$detHardware]"
             )
 
-            // Dòng 2: Recognizer Info (Truyền biến isRecognizerReady)
             DebugLine(
-                label = "REC",
-                isReady = isRecognizerReady, // <--- Check riêng ở đây
+                label = "REC:",
+                isReady = isRecognizerReady,
                 timeMs = recTimeMs,
-                hardware = recHardware
+                hardware = "[$recHardware]"
+            )
+
+            DebugLine(
+                label = "SUM:", // Label dài nhất này sẽ quyết định độ rộng cần thiết
+                isReady = true,
+                timeMs = detTimeMs + recTimeMs,
+                hardware = ""
             )
         }
     }
@@ -564,8 +572,13 @@ fun DebugLine(
     ) {
         // 1. Luôn hiển thị Nhãn (VD: "DET: ") để bố cục thẳng hàng
         Text(
-            text = "$label: ",
-            style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            text = label.trim(), // Có thể bỏ các dấu cách thừa đi vì đã dùng width
+            modifier = Modifier.width(40.dp), // <--- Ép chiều rộng cố định (tùy chỉnh số này)
+            style = TextStyle(
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp
+            )
         )
 
         if (!isReady) {
@@ -588,7 +601,7 @@ fun DebugLine(
 
             val hwColor = if (hardware.contains("NNAPI")) Color.Cyan else Color.LightGray
             Text(
-                text = "[$hardware]",
+                text = hardware,
                 style = TextStyle(color = hwColor, fontSize = 12.sp)
             )
         }
