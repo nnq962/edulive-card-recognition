@@ -13,7 +13,7 @@ class TestWithAnImage(private val context: Context) {
 
     companion object {
         private const val TAG = "TestWithAnImage"
-        private const val TEST_IMAGE_NAME = "test.jpg"
+        private const val TEST_IMAGE_NAME = "test_samsung.jpg"
     }
 
     private val detector = Detector()

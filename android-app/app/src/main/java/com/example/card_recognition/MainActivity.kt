@@ -3,7 +3,6 @@ package com.example.card_recognition
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -15,6 +14,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -33,6 +33,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -45,10 +46,8 @@ import com.example.card_recognition.ui.theme.CardrecognitionTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-import androidx.compose.foundation.layout.width
-import androidx.compose.ui.graphics.nativeCanvas
 import java.util.Locale
+
 
 class MainActivity : ComponentActivity() {
 
@@ -90,16 +89,13 @@ class MainActivity : ComponentActivity() {
         // 2. Khởi tạo Recognizer và Detector
         recognizer = Recognizer()
         detector = Detector()
-        // Cấu hình phần cứng mong muốn
-        val useNNAPIForDet = false // Ví dụ: Detector dùng CPU
-        val useNNAPIForRec = false  // Ví dụ: Recognizer dùng NNAPI
 
         // 3. ✅ GỌI TRÊN LUỒNG NỀN (IO) BẰNG COROUTINE
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 // this@MainActivity là context của Activity
-                detector.initialize(this@MainActivity, useNNAPI = useNNAPIForDet)
-                recognizer.initialize(this@MainActivity, useNNAPI = useNNAPIForRec)
+                detector.initialize(this@MainActivity, useNNAPI = AppConfig.USE_NNAPI_FOR_DETECTOR)
+                recognizer.initialize(this@MainActivity, useNNAPI = AppConfig.USE_NNAPI_FOR_RECOGNIZER)
                 
                 // Load embedding data
                 val data = EmbeddingData.loadFromAssets(this@MainActivity, "data.json")
@@ -109,8 +105,8 @@ class MainActivity : ComponentActivity() {
                     embeddingData = data
                     isDetectorReady = true
                     isRecognizerReady = true
-                    detHardwareInfo = if (useNNAPIForDet) "NNAPI" else "CPU"
-                    recHardwareInfo = if (useNNAPIForRec) "NNAPI" else "CPU"
+                    detHardwareInfo = if (AppConfig.USE_NNAPI_FOR_DETECTOR) "NNAPI" else "CPU"
+                    recHardwareInfo = if (AppConfig.USE_NNAPI_FOR_RECOGNIZER) "NNAPI" else "CPU"
                     
                     if (data != null) {
                         Log.i(TAG, "Models + EmbeddingData đã khởi tạo thành công (${data.getCategoryCount()} categories)")
@@ -160,31 +156,6 @@ class MainActivity : ComponentActivity() {
             this,
             Manifest.permission.CAMERA
         ) == PackageManager.PERMISSION_GRANTED
-    }
-    
-    /**
-     * Convert ImageProxy to Bitmap WITHOUT rotation
-     */
-    internal fun imageProxyToBitmap(image: androidx.camera.core.ImageProxy): Bitmap {
-        val yBuffer = image.planes[0].buffer
-        val uBuffer = image.planes[1].buffer
-        val vBuffer = image.planes[2].buffer
-
-        val ySize = yBuffer.remaining()
-        val uSize = uBuffer.remaining()
-        val vSize = vBuffer.remaining()
-
-        val nv21 = ByteArray(ySize + uSize + vSize)
-
-        yBuffer.get(nv21, 0, ySize)
-        vBuffer.get(nv21, ySize, vSize)
-        uBuffer.get(nv21, ySize + vSize, uSize)
-
-        val yuvImage = android.graphics.YuvImage(nv21, android.graphics.ImageFormat.NV21, image.width, image.height, null)
-        val out = java.io.ByteArrayOutputStream()
-        yuvImage.compressToJpeg(android.graphics.Rect(0, 0, image.width, image.height), 100, out)
-        val imageBytes = out.toByteArray()
-        return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
     }
 }
 
@@ -254,11 +225,8 @@ fun CameraScreen(
                 (context as ComponentActivity).lifecycleScope.launch(Dispatchers.Default) {
                     try {
                         Log.d("CameraScreen", "Processing frame $frameCount")
-                        
-                        // Chuyển đổi ImageProxy sang Bitmap KHÔNG ROTATE
-                        // val mainActivity = context as MainActivity  <-- REMOVED (Không cần cast lại vì đã có ở trên)
-                        val bitmap = mainActivity.imageProxyToBitmap(imageProxy)
-                        
+                        val bitmap = imageProxy.toBitmap()
+
                         val imgWidth = bitmap.width
                         val imgHeight = bitmap.height
                         
@@ -266,7 +234,7 @@ fun CameraScreen(
 
                         // Gọi detection và đo thời gian
                         val detectionStartTime = System.currentTimeMillis()
-                        val results = detector.detect(bitmap, 0.80f)
+                        val results = detector.detect(bitmap, AppConfig.DETECTOR_THRESHOLD)
                         val detectionDuration = System.currentTimeMillis() - detectionStartTime
 
                         // Recognition pipeline (chỉ chạy nếu có embeddingData)
@@ -300,7 +268,7 @@ fun CameraScreen(
                                             // Find best match
                                             val matchResult = currentEmbeddingData.findBestMatch(
                                                 queryEmbedding = embedding,
-                                                threshold = 0.75f
+                                                threshold = AppConfig.RECOGNIZER_THRESHOLD
                                             )
 
                                             val category = matchResult.category ?: "Unknown"

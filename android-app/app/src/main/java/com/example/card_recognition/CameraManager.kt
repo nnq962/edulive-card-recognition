@@ -1,6 +1,7 @@
 package com.example.card_recognition // Thay thế bằng package của bạn
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.util.Log
 import android.util.Size
 import androidx.camera.core.CameraSelector
@@ -11,6 +12,8 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.Executors
 
 class CameraManager(
@@ -68,6 +71,7 @@ class CameraManager(
                         it.setAnalyzer(analysisExecutor) { image ->
                             // Log độ phân giải của frame
                             Log.i(TAG, "Frame resolution: ${image.width}x${image.height}")
+                            // saveImage(image)
                             // Đây là nơi frame được gửi đi
                             onFrameAnalyzed(image)
                             // Lưu ý: image.close() sẽ được gọi ở nơi nhận (MainActivity)
@@ -102,6 +106,19 @@ class CameraManager(
             Log.i(TAG, "Camera đã được hủy liên kết (unbind).")
         } catch (e: Exception) {
             Log.e(TAG, "Hủy liên kết CameraX thất bại", e)
+        }
+    }
+
+    private fun saveImage(image: ImageProxy) {
+        try {
+            val bitmap = image.toBitmap()
+            val file = File(context.externalCacheDir, "frame_${System.currentTimeMillis()}.jpg")
+            FileOutputStream(file).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
+            }
+            Log.i(TAG, "Image saved to: ${file.absolutePath}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving image", e)
         }
     }
 }
